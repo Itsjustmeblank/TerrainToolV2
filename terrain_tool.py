@@ -6,7 +6,6 @@ from shiboken2 import wrapInstance
 import maya.OpenMayaUI as omui
 
 
-
 def maya_main_window():
     ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(int(ptr), QtWidgets.QWidget)
@@ -18,11 +17,16 @@ class TerrainTool:
 
         self.mesh = None
         self.mode = "mountain"
+
         self.intensity = 10.0
         self.radius = 0.3
 
         self.noise_enabled = True
         self.noise_strength = 0.2
+
+
+        self.offset_x = 0.0
+        self.offset_z = 0.0
 
         self.original_verts = {}
 
@@ -48,6 +52,7 @@ class TerrainTool:
     def generate(self):
 
         self.mesh = self.get_mesh()
+
         if not self.mesh:
             cmds.warning("Select a mesh")
             return
@@ -58,11 +63,12 @@ class TerrainTool:
 
         bb = cmds.exactWorldBoundingBox(self.mesh)
 
-        cx = (bb[0] + bb[3]) * 0.5
-        cz = (bb[2] + bb[5]) * 0.5
-
         width = bb[3] - bb[0]
         depth = bb[5] - bb[2]
+
+
+        cx = (bb[0] + bb[3]) * 0.5 + self.offset_x
+        cz = (bb[2] + bb[5]) * 0.5 + self.offset_z
 
         scaled_radius = self.radius * max(width, depth)
 
@@ -117,8 +123,6 @@ class TerrainTool:
             )
 
 
-
-
 class TerrainUI(QtWidgets.QDialog):
 
     def __init__(self, parent=None):
@@ -149,13 +153,24 @@ class TerrainUI(QtWidgets.QDialog):
         self.radius.setRange(1, 100)
         self.radius.setValue(30)
 
-        self.noise_label = QtWidgets.QLabel("Noise Strength")
         self.noise_toggle = QtWidgets.QCheckBox("Enable Noise")
         self.noise_toggle.setChecked(True)
 
+        self.noise_label = QtWidgets.QLabel("Noise Strength")
         self.noise = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.noise.setRange(0, 100)
         self.noise.setValue(20)
+
+        # NEW: offset controls
+        self.offset_x_label = QtWidgets.QLabel("Offset X")
+        self.offset_x = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.offset_x.setRange(-100, 100)
+        self.offset_x.setValue(0)
+
+        self.offset_z_label = QtWidgets.QLabel("Offset Z")
+        self.offset_z = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.offset_z.setRange(-100, 100)
+        self.offset_z.setValue(0)
 
         self.btn_generate = QtWidgets.QPushButton("Generate Terrain")
         self.btn_reset = QtWidgets.QPushButton("Reset Mesh")
@@ -178,6 +193,13 @@ class TerrainUI(QtWidgets.QDialog):
         layout.addWidget(self.noise_label)
         layout.addWidget(self.noise)
 
+        # NEW: offset UI
+        layout.addWidget(self.offset_x_label)
+        layout.addWidget(self.offset_x)
+
+        layout.addWidget(self.offset_z_label)
+        layout.addWidget(self.offset_z)
+
         layout.addWidget(self.btn_generate)
         layout.addWidget(self.btn_reset)
         layout.addWidget(self.btn_close)
@@ -196,6 +218,10 @@ class TerrainUI(QtWidgets.QDialog):
 
         self.tool.noise_enabled = self.noise_toggle.isChecked()
         self.tool.noise_strength = self.noise.value() / 100.0
+
+
+        self.tool.offset_x = self.offset_x.value() * 0.1
+        self.tool.offset_z = self.offset_z.value() * 0.1
 
         self.tool.generate()
 
