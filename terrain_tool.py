@@ -1,270 +1,221 @@
-import maya.api.OpenMaya as om
-import maya.cmds as cmds
 import math
+import maya.cmds as cmds
+
+from PySide2 import QtWidgets, QtCore
+from shiboken2 import wrapInstance
+import maya.OpenMayaUI as omui
 
 
-class TerrainWidget:
-
-    def __init__(self, name="terrain_widget", radius_name="terrain_radius"):
-        self.widget_name = name
-        self.radius_name = radius_name
-
-    def create(self, radius):
-        if cmds.objExists(self.widget_name):
-            cmds.select(self.widget_name)
-            return
-
-        loc = cmds.spaceLocator(name=self.widget_name)[0]
-
-        cmds.setAttr(loc + ".ty", lock=True, keyable=False, channelBox=False)
-
-        cmds.setAttr(loc + ".localScaleX", 1.5)
-        cmds.setAttr(loc + ".localScaleY", 1.5)
-        cmds.setAttr(loc + ".localScaleZ", 1.5)
-
-        self.create_radius_visual(radius)
-
-        cmds.select(clear=True)
-
-    def get_position(self):
-        if not cmds.objExists(self.widget_name):
-            cmds.warning("Create the widget first.")
-            return None
-
-        return cmds.xform(self.widget_name, q=True, ws=True, t=True)
-
-    def create_radius_visual(self, radius):
-        if cmds.objExists(self.radius_name):
-            return
-
-        circle = cmds.circle(
-            name=self.radius_name,
-            normal=(0, 1, 0),
-            radius=1
-        )[0]
-
-        cmds.parent(circle, self.widget_name)
-        cmds.setAttr(circle + ".translate", 0, 0, 0)
-
-        self.update_radius(radius)
-
-    def update_radius(self, radius):
-        if cmds.objExists(self.radius_name):
-            cmds.setAttr(self.radius_name + ".scaleX", radius)
-            cmds.setAttr(self.radius_name + ".scaleZ", radius)
+# Get Maya main window
+def maya_main_window():
+    ptr = omui.MQtUtil.mainWindow()
+    return wrapInstance(int(ptr), QtWidgets.QWidget)
 
 
 class TerrainTool:
 
     def __init__(self):
 
-        self.feature_type = "mountain"
+        self.mesh = None
+        self.mode = "mountain"
+        self.intensity = 10.0
+        self.radius = 0.3
 
-        self.center_x = 0.0
-        self.center_z = 0.0
+        self.noise_enabled = True
+        self.noise_strength = 0.2
 
-        self.intensity = 3.0
-        self.noise_strength = 0.5
+        self.original_verts = {}
 
-        self.original_vertices = {}
+    def get_mesh(self):
+        sel = cmds.ls(sl=True, long=True)
+        return sel[0] if sel else None
 
-        self.widget_name = "terrain_widget"
-        self.radius_name = "terrain_radius"
+    def cache_original(self, mesh):
 
-        self.widget = TerrainWidget(self.widget_name, self.radius_name)
-
-
-    def get_selected_mesh(self):
-        sel = om.MGlobal.getActiveSelectionList()
-
-        if sel.length() == 0:
-            om.MGlobal.displayError("Select a mesh.")
-            return None
-
-        dag = sel.getDagPath(0)
-
-        try:
-            dag.extendToShape()
-        except:
-            om.MGlobal.displayError("Selection has no shape.")
-            return None
-
-        if not dag.node().hasFn(om.MFn.kMesh):
-            om.MGlobal.displayError("Selected object is not a polygon mesh.")
-            return None
-
-        return om.MFnMesh(dag)
-
-    def get_vertices(self, mesh_fn):
-        return mesh_fn.getPoints(om.MSpace.kWorld)
-
-
-    def compute_distance(self, v):
-        dx = v.x - self.center_x
-        dz = v.z - self.center_z
-        return math.sqrt(dx * dx + dz * dz)
-
-    def compute_falloff(self, distance):
-        radius = self.radius
-
-        t = distance / radius
-        if t >= 1.0:
-            return 0.0
-
-        return 1 - (3 * t * t - 2 * t * t * t)
-
-    def sample_noise(self, x, z):
-        return math.sin(x * 0.3) * math.cos(z * 0.3)
-
-
-
-
-
-    def apply_mountain(self, v, dist):
-        falloff = self.compute_falloff(dist)
-
-        height = falloff * self.intensity
-        height += self.sample_noise(v.x, v.z) * self.noise_strength * falloff
-
-        return v.y + height
-
-    def apply_valley(self, v, dist):
-        falloff = self.compute_falloff(dist)
-
-        depth = falloff * self.intensity
-        depth += self.sample_noise(v.x, v.z) * self.noise_strength * falloff
-
-        return v.y - depth
-
-    def apply_feature(self, v, dist):
-        if self.feature_type == "mountain":
-            return self.apply_mountain(v, dist)
-        elif self.feature_type == "valley":
-            return self.apply_valley(v, dist)
-        return v.y
-
-
-
-
-
-
-    def modify_vertices(self, vertices):
-        new_verts = []
-
-        for v in vertices:
-            dist = self.compute_distance(v)
-
-            new_v = om.MPoint(v)
-
-            if dist <= self.radius:
-                new_v.y = self.apply_feature(v, dist)
-
-            new_verts.append(new_v)
-
-        return new_verts
-
-    def update_mesh(self, mesh_fn, vertices):
-        mesh_fn.setPoints(vertices, om.MSpace.kWorld)
-
-
-
-
-
-    def run(self):
-
-        if not cmds.objExists(self.widget.widget_name):
-            cmds.warning("Create the widget first.")
+        if mesh in self.original_verts:
             return
 
-        mesh_fn = self.get_selected_mesh()
-        if not mesh_fn:
+        verts = cmds.ls(mesh + ".vtx[*]", fl=True)
+
+        self.original_verts[mesh] = [
+            cmds.pointPosition(v, w=True) for v in verts
+        ]
+
+    def noise(self, x, z):
+        n = math.sin(x * 12.9898 + z * 78.233) * 43758.5453
+        return (n - math.floor(n)) * 2.0 - 1.0
+
+    def generate(self):
+
+        self.mesh = self.get_mesh()
+        if not self.mesh:
+            cmds.warning("Select a mesh")
             return
 
-        pos = self.widget.get_position()
-        if not pos:
-            return
+        self.cache_original(self.mesh)
 
-        self.center_x = pos[0]
-        self.center_z = pos[2]
+        verts = cmds.ls(self.mesh + ".vtx[*]", fl=True)
 
+        bb = cmds.exactWorldBoundingBox(self.mesh)
 
-        self.radius = cmds.getAttr(self.widget.radius_name + ".scaleX")
+        cx = (bb[0] + bb[3]) * 0.5
+        cz = (bb[2] + bb[5]) * 0.5
 
-        self.widget.update_radius(self.radius)
+        width = bb[3] - bb[0]
+        depth = bb[5] - bb[2]
 
-        verts = self.get_vertices(mesh_fn)
-        mesh_name = mesh_fn.name()
+        scaled_radius = self.radius * max(width, depth)
 
-        if mesh_name not in self.original_vertices:
-            self.original_vertices[mesh_name] = [om.MPoint(v) for v in verts]
+        for v in verts:
 
-        new_verts = self.modify_vertices(verts)
-        self.update_mesh(mesh_fn, new_verts)
+            pos = cmds.pointPosition(v, w=True)
 
-        om.MGlobal.displayInfo("Terrain applied")
+            dx = pos[0] - cx
+            dz = pos[2] - cz
 
+            dist = math.sqrt(dx * dx + dz * dz)
 
+            if dist > scaled_radius:
+                continue
 
+            t = 1.0 - (dist / scaled_radius)
+            falloff = t * t * (3.0 - 2.0 * t)
 
+            offset = falloff * self.intensity
+
+            if self.noise_enabled:
+
+                main_noise = self.noise(pos[0], pos[2]) * self.noise_strength
+                micro_noise = self.noise(pos[0] * 3.0, pos[2] * 3.0) * (self.noise_strength * 0.3)
+
+                offset += (main_noise * falloff) + micro_noise
+
+            if self.mode == "valley":
+                offset *= -1
+
+            cmds.move(0, offset, 0, v, r=True, os=True)
 
     def reset(self):
 
-        mesh_fn = self.get_selected_mesh()
-        if not mesh_fn:
+        mesh = self.get_mesh()
+
+        if not mesh or mesh not in self.original_verts:
+            cmds.warning("Nothing to reset")
             return
 
-        mesh_name = mesh_fn.name()
+        verts = cmds.ls(mesh + ".vtx[*]", fl=True)
+        original = self.original_verts[mesh]
 
-        if mesh_name not in self.original_vertices:
-            return
-
-        mesh_fn.setPoints(self.original_vertices[mesh_name], om.MSpace.kWorld)
-
-        om.MGlobal.displayInfo("Terrain reset")
-
-
-
-
-
-
-    def enable_live_update(self):
-
-        if not cmds.objExists(self.widget.widget_name):
-            cmds.warning("Create widget first.")
-            return
-
-        def callback():
-            self.run()
-
-        for axis in ["translateX", "translateY", "translateZ"]:
-            cmds.scriptJob(
-                attributeChange=[f"{self.widget.widget_name}.{axis}", callback],
-                protected=True
+        for i, v in enumerate(verts):
+            cmds.move(
+                original[i][0],
+                original[i][1],
+                original[i][2],
+                v,
+                absolute=True,
+                worldSpace=True
             )
 
 
 
 
-tool = TerrainTool()
+class TerrainUI(QtWidgets.QDialog):
 
-def apply_mountain():
-    tool.feature_type = "mountain"
-    tool.run()
+    def __init__(self, parent=None):
+
+        super(TerrainUI, self).__init__(parent or maya_main_window())
+
+        self.setWindowTitle("Terrain Tool")
+
+        self.tool = TerrainTool()
+
+        self.build_ui()
+        self.build_layout()
+        self.build_connections()
+
+    def build_ui(self):
+
+        self.mode_label = QtWidgets.QLabel("Mode")
+        self.mode = QtWidgets.QComboBox()
+        self.mode.addItems(["Mountain", "Valley"])
+
+        self.intensity_label = QtWidgets.QLabel("Intensity")
+        self.intensity = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.intensity.setRange(1, 100)
+        self.intensity.setValue(20)
+
+        self.radius_label = QtWidgets.QLabel("Radius (Mesh %)")
+        self.radius = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.radius.setRange(1, 100)
+        self.radius.setValue(30)
+
+        self.noise_label = QtWidgets.QLabel("Noise Strength")
+        self.noise_toggle = QtWidgets.QCheckBox("Enable Noise")
+        self.noise_toggle.setChecked(True)
+
+        self.noise = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.noise.setRange(0, 100)
+        self.noise.setValue(20)
+
+        self.btn_generate = QtWidgets.QPushButton("Generate Terrain")
+        self.btn_reset = QtWidgets.QPushButton("Reset Mesh")
+        self.btn_close = QtWidgets.QPushButton("Close Tool")
+
+    def build_layout(self):
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        layout.addWidget(self.mode_label)
+        layout.addWidget(self.mode)
+
+        layout.addWidget(self.intensity_label)
+        layout.addWidget(self.intensity)
+
+        layout.addWidget(self.radius_label)
+        layout.addWidget(self.radius)
+
+        layout.addWidget(self.noise_toggle)
+        layout.addWidget(self.noise_label)
+        layout.addWidget(self.noise)
+
+        layout.addWidget(self.btn_generate)
+        layout.addWidget(self.btn_reset)
+        layout.addWidget(self.btn_close)
+
+    def build_connections(self):
+
+        self.btn_generate.clicked.connect(self.on_generate)
+        self.btn_reset.clicked.connect(self.on_reset)
+        self.btn_close.clicked.connect(self.close)
+
+    def on_generate(self):
+
+        self.tool.mode = self.mode.currentText().lower()
+        self.tool.intensity = self.intensity.value() / 5.0
+        self.tool.radius = self.radius.value() / 100.0
+
+        self.tool.noise_enabled = self.noise_toggle.isChecked()
+        self.tool.noise_strength = self.noise.value() / 100.0
+
+        self.tool.generate()
+
+    def on_reset(self):
+        self.tool.reset()
 
 
-def apply_valley():
-    tool.feature_type = "valley"
-    tool.run()
+_ui = None
 
 
-def reset_terrain():
-    tool.reset()
+def show_ui():
 
+    global _ui
 
-def enable_live():
-    tool.enable_live_update()
+    if _ui:
+        try:
+            _ui.close()
+            _ui.deleteLater()
+        except:
+            pass
 
-
-def create_widget():
-    tool.widget.create(tool.intensity)
-    
+    _ui = TerrainUI()
+    _ui.show()
