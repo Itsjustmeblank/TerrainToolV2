@@ -6,7 +6,7 @@ from shiboken2 import wrapInstance
 import maya.OpenMayaUI as omui
 
 
-# Get Maya main window
+
 def maya_main_window():
     ptr = omui.MQtUtil.mainWindow()
     return wrapInstance(int(ptr), QtWidgets.QWidget)
